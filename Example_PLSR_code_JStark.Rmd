@@ -1,0 +1,195 @@
+---
+title: "Example_PLSR_Analysis"
+author: "JStark"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## Code Information
+
+Code to run Partial Least Squares Regression Analysis
+Code adopted from from Dr. H. Abdi
+Modified by Jessica H. Stark, M.S., The Ohio State University
+
+## Download packages needed for analysis
+```{r}
+library(corrplot)
+library(ExPosition)
+library(tidyverse)
+library(PTCA4CATA)
+library(data4PCCAR) # PLSR 
+library(boot)
+library(dplyr)
+```
+
+## Read in your X-matrix and Y- Matrix
+These should be cleaned datasheets with your predictor (x) and outcome (y) variables of interest
+Exclude subject ID from these CSVs since that will not be one of your variables
+```{r}
+X_matrix <- read.csv('EXAMPLE.csv')  #CSV file of all of your predictor variables (in other words, your X-matrix)
+
+Y_matrix <- read.csv('EXAMPLE.csv')  #CSV file of all of your outcome variables (in other words, your Y-matrix)
+```
+
+## Partal Least Squares Regression (PLSR) Setup 
+```{r}
+set.seed(3)  #Set the seed so that you get the same result every tim
+
+#Use function "normaliz" to center both dataframes (required for PLSR)
+X_matrix_normal <- normaliz(X_matrix)
+Y_matrix_normal <- normaliz(Y_matrix)
+```
+
+## Compute Partial Least Squares Regression (PLSR)
+```{r}
+#Uses "PLSR_SVD" function
+#Start with number of total possible components (number of columns in X_matrix), then explore screeplot to see how many components to analyze
+#This is best implemented with training and then test data 
+
+resultPLSR <- PLSR_SVD(X_matrix_normal[1:nrow(X_matrix_normal),], Y_matrix_normal[1:nrow(Y_matrix_normal),], ncol(X_matrix_normal), #number of columns in X_matrix 
+                    inference = TRUE,
+                    displayJack = FALSE)
+```
+
+## Explore Scree Plots
+```{r pressure, echo=FALSE}
+#Scree Plot for the X-Matrix 
+#Uses function "PlotScree"
+
+Scree_plot_x <- PlotScree(ev    = resultPLSR$R2x, #percent variance explained per PLSR component, x-matrix 
+   title = 'PLSR: X-Matrix Scree Plot',
+)
+```
+
+```{r}
+# Pseudo scree Y
+Scree_plot_y <- PlotScree(ev    = resultPLSR$R2y, #percent variance explained per PLSR component, y-matrix 
+   title = 'PLSR: Y-Matrix Scree Plot',
+)
+```
+
+##Run PLSR with optimal number of components 
+```{r}
+resultPLSR_2 <- PLSR_SVD(X_matrix_normal[1:nrow(X_matrix_normal),], Y_matrix_normal[1:nrow(Y_matrix_normal),], 2, #this number will change based on the analysis of the scree plot
+                    inference = TRUE,
+                    displayJack = FALSE)
+```
+
+## Explore circle of correlation for components 1 and 2, X-matrix
+```{r}
+#Use function "correlationPlotter"
+#This can then be modified for other components of the PLSR model
+X_matrix_correlation_plot <- correlationPlotter(data_matrix = X_matrix_normal,
+                   x_axis = 1, #component 1
+                   y_axis = 2, #component 2 
+                   factor_scores = resultPLSR_2$T #where factor scores are saved in the results matrix
+                   )
+```
+
+##Explore circle of correlation components 1 and 2, y-matrix
+```{r}
+#Same as above, but for Y-matrix variables
+Y_matrix_corr_plot <- correlationPlotter(data_matrix = Y_matrix_normal,
+                   x_axis = 1, #component 1
+                   y_axis = 2, #component 2
+                   factor_scores = resultPLSR_2$T) #where factor scores are saved in the results matrix
+```
+
+##Explore results by a given categorical variable
+
+###Import categorical data 
+```{r}
+Categorical_data <- read.csv('CATEGORICAL_DATA.csv')
+```
+
+###The example below is for Age Group
+```{r}
+#Color age groups for graphing purposes
+color_age_group <- as.factor(Categorical_data$Age_Group)
+age_group_color <- recode(color_age_group, 
+          'Young_Adult' = 'blue',
+          'Middle_Aged' = 'green',
+          'Older_Adult' = 'deeppink') 
+```
+
+###Graph the observations by age group, for components 1 and 2 
+```{r}
+#Below is a map which plots each participant and how they load onto components 1 and 2, colored by age group
+participant_map_age_groups <- PTCA4CATA::createFactorMap(
+  resultPLSR_2$T, 
+  title = 'Participant Loadings on 
+  Components 1 and 2 by Age Group',
+  col.points = age_group_color,
+  alpha.points = .3,
+  pch = 19,
+  display.labels = FALSE,
+  text.cex = 12,
+  col.axes = 'black',
+  col.background = 'white',
+)
+
+#Create labels ----
+label_x_axis_participant_map <- labs(x = paste0('Component ',1,'. Variance Explained = ',
+                            round(resultPLSR_2$R2y[1],2) ))
+label_y_axis_participant_map <- labs(y = paste0('Component ',2,'. Variance Explained = ',
+                            round(resultPLSR_2$R2y[2],2) )) 
+
+#Now add the labels and make the text bigger on the original participant map 
+participant_map_age_group_labeled <- participant_map_age_groups$zeMap + label_x_axis_participant_map + label_y_axis_participant_map + theme(text = element_text(size = 14)) #change text size to 14
+
+#Print the map 
+print(participant_map_age_group_labeled)
+```
+
+### Create bootstrapped means per component per age group, 1000 bootstraps
+```{r}
+#Use "Boot4Mean" function to bootstrap the factor scores from the PLSR results to assess how a given group loads on a given component 
+boot_means_age_group <- Boot4Mean(Data=resultPLSR_2$T,design=color_age_group,niter=1000)
+```
+
+### Calculate bootstrap ratios
+These bootstrap ratios tell us whether a GROUP is significantly loading on a given PLSR-derived component
+```{r}
+#Use function "boot.ratio.test" to obtain bootstrap ratios and look at $BootCube results to explore by group 
+bootstrap_ratio_age_group <- boot.ratio.test(boot_means_age_group$BootCube)
+```
+
+###Now add ellipses to the graph to represent the 95% confidence interval for each bootstrapped group mean 
+Below code obtained from from Dr. Ju-chi Yu 
+```{r}
+#Re-create the coloring variable for plotting
+age_group_color_index <- c('Young_Adult' = 'blue',
+                           'Middle_Aged' = 'green',
+                            'Older_Adult' = 'deeppink')
+
+#Make BootCube output it's own variable (same as bootcube variable from boot4mean above)
+boot_cube_age_group <- boot_means_age_group$BootCube
+
+#Rename these columns so to say "factor" in front of them for clarity
+colnames(boot_cube_age_group) <- paste0("Factor ", c(1:ncol(resPLSR_2$T)))
+
+#Create ellipses using "MakeCIELLIPSES" function
+Bootstrapped_ellipses_age_group <- MakeCIEllipses(boot_cube_age_group,
+                                   names.of.factors = paste0("Factor ", c(1:2)),
+                                   col = age_group_color_index[rownames(boot_cube_age_group)],
+                                   alpha.ellipse = 0.1,
+                                   line.size = 0.8, alpha.line = 0.8) #these are parameters for your elipses, change per your preference 
+```
+
+###Create a map that just has the bootstrapped group means
+```{r}
+participant_map_age_group_confidence_intervals <- PTCA4CATA:: createFactorMap(
+  boot_means_age_group$BootstrappedGroupMeans,
+  col.points = age_group_color_index[rownames(boot_means_age_group$BootstrappedGroupMeans)],
+  alpha.points = 1,
+  pch = 19,
+  cex = 4
+)
+```
+
+###Now using all of the individual maps you just created, create a graph that has individual participant data, bootstrapped group means, and 95% confidence interval ellipses
+```{r}
+participant_map_age_groups_full <- participant_map_age_groups$zeMap_background  + participant_map_age_groups$zeMap_dots + label_x_axis_participant_map + label_y_axis_participant_map + Bootstrapped_ellipses_age_group + participant_map_age_group_confidence_intervals$zeMap_dots + theme(text = element_text(size = 14))
+
+print(participant_map_age_groups_full)
+```
